@@ -11,6 +11,7 @@
   const LEVELS = 5;
   const ITEMS = 20;
   const LIVES = 3;
+  const MAX_LIVES = 5;
   const MAX_ATTEMPTS = 1;
   const BASE_PTS = [0, 10, 20, 30, 40, 50];
   const ITEM_SEC = [0, 10, 9, 8, 8, 9];
@@ -121,6 +122,12 @@
       tone(70, 0.08, 'sine', 0.35, t);
       tone(55, 0.12, 'sine', 0.22, t + 0.16);
     }
+    function bonusLife() {
+      const c = ensure(); if (!c) return;
+      const t = c.currentTime;
+      [523, 659, 784, 988, 1175].forEach(function (f, i) { tone(f, 0.13, 'sine', 0.28, t + i * 0.07); });
+      tone(1568, 0.22, 'triangle', 0.18, t + 0.38);
+    }
     function levelUp() {
       const c = ensure(); if (!c) return;
       const t = c.currentTime;
@@ -158,7 +165,7 @@
       level = lv;
       if (humOsc) humOsc.frequency.setTargetAtTime(55 + level * 4, (ctx && ctx.currentTime) || 0, 0.3);
     }
-    return { unlock, toggle, setEnabled, paintBtn, ding, buzz, twang, bubble, chestOpen, sharkBite, heartbeat, levelUp, startMusic, stopMusic, setLevel };
+    return { unlock, toggle, setEnabled, paintBtn, ding, buzz, twang, bubble, chestOpen, sharkBite, heartbeat, bonusLife, levelUp, startMusic, stopMusic, setLevel };
   })();
 
   function $(id) { return document.getElementById(id); }
@@ -581,13 +588,35 @@
     })();
   }
 
+
+  function pickBonusIndices(n) {
+    // Exactly 2 bonus items per level: never item 1 (index 0), never adjacent.
+    const pool = [];
+    for (let i = 1; i < n; i++) pool.push(i);
+    for (let i = pool.length - 1; i > 0; i--) {
+      const j = (Math.random() * (i + 1)) | 0;
+      const tmp = pool[i]; pool[i] = pool[j]; pool[j] = tmp;
+    }
+    const a = pool[0];
+    let b = null;
+    for (let i = 1; i < pool.length; i++) {
+      if (Math.abs(pool[i] - a) > 1) { b = pool[i]; break; }
+    }
+    if (b == null) b = (a >= n - 2) ? a - 2 : a + 2;
+    return a < b ? [a, b] : [b, a];
+  }
+  function isBonusQ() {
+    return !!(run && run.bonusIdx && run.bonusIdx.indexOf(run.qIndex) >= 0);
+  }
+
   function startLevel(level) {
     if (!attempt || !attempt.active) { alert('Start an attempt first.'); return; }
     Sound.setLevel(level);
     if (level > 1) Sound.levelUp();
     const questions = IRQuestions.generateLevel(level, ITEMS);
+    const bonusIdx = pickBonusIndices(ITEMS);
     run = {
-      level: level, questions: questions, qIndex: 0, lives: LIVES,
+      level: level, questions: questions, qIndex: 0, bonusIdx: bonusIdx, lives: LIVES,
       correct: 0, score: 0, streak: 0,
       itemT: itemDuration(level), itemMax: itemDuration(level),
       flash: null, over: false, endedByLives: false, lastTs: 0,
@@ -611,6 +640,9 @@
     run.itemT = itemDuration(run.level);
     run.itemMax = run.itemT;
     if (run.hazards.some(function (h) { return h.kind === 'shark'; })) warnFlash = 0.85;
+    if (isBonusQ()) {
+      try { Sound.bonusLife(); } catch (e) {}
+    }
   }
 
   function updateHud() {
@@ -619,9 +651,18 @@
     $('hud-level').textContent = 'L' + run.level;
     $('hud-q').textContent = (run.qIndex + 1) + '/' + ITEMS;
     $('hud-score').textContent = String((attempt ? attempt.score : 0) + run.score);
-    $('hud-lives').textContent = '❤'.repeat(Math.max(0, run.lives)) + '♡'.repeat(Math.max(0, LIVES - run.lives));
+    const lifeFill = Math.max(0, run.lives);
+    $('hud-lives').textContent = '❤'.repeat(lifeFill) + (lifeFill < LIVES ? '♡'.repeat(LIVES - lifeFill) : '');
     const q = run.questions[run.qIndex];
+    const bonus = isBonusQ();
+    const ban = $('hud-bonus');
+    if (ban) {
+      ban.textContent = '❤ BONUS LIFE question';
+      ban.classList.toggle('show', bonus);
+      ban.hidden = !bonus;
+    }
     $('hud-prompt').textContent = q ? (q.promptDisplay || q.prompt) : '—';
+    $('hud-prompt').classList.toggle('bonus', bonus);
     const pct = Math.max(0, run.itemT / run.itemMax);
     $('timer-bar').style.transform = 'scaleX(' + pct + ')';
     $('timer-label').textContent = run.itemT.toFixed(1) + 's';
@@ -649,9 +690,15 @@
       run.correct++; run.streak++;
       const gained = BASE_PTS[run.level] + Math.floor(run.streak / 3) * 5;
       run.score += gained;
-      run.flash = { kind: 'ok', t: 0.55, gained: gained };
+      let bonusGain = false;
+      if (isBonusQ() && run.lives < MAX_LIVES) {
+        run.lives++;
+        bonusGain = true;
+      }
+      run.flash = { kind: 'ok', t: 0.7, gained: gained, bonusLife: bonusGain };
       burstAt(chest.x, chest.y, true);
       Sound.chestOpen(); Sound.ding();
+      if (bonusGain) Sound.bonusLife();
     } else {
       run.streak = 0; run.lives--;
       run.flash = { kind: 'bad', t: 0.55 };
@@ -940,8 +987,17 @@
     const s = t.r / 32;
     ctx.scale(s, s);
     // glow
-    ctx.fillStyle = 'rgba(255,215,0,.2)';
-    ctx.beginPath(); ctx.arc(0, 0, 40, 0, Math.PI * 2); ctx.fill();
+    if (isBonusQ() && !t.hit) {
+      const pulse = 0.35 + 0.25 * Math.sin(animT * 6 + t.phase);
+      ctx.fillStyle = 'rgba(255,213,79,' + pulse + ')';
+      ctx.beginPath(); ctx.arc(0, 0, 52, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = 'rgba(255,235,59,.95)';
+      ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(0, 0, 44, 0, Math.PI * 2); ctx.stroke();
+    } else {
+      ctx.fillStyle = 'rgba(255,215,0,.2)';
+      ctx.beginPath(); ctx.arc(0, 0, 40, 0, Math.PI * 2); ctx.fill();
+    }
     // body
     ctx.fillStyle = t.open ? '#8d6e63' : '#6d4c41';
     ctx.fillRect(-22, -6, 44, 28);
@@ -1143,6 +1199,11 @@
         ctx.font = 'bold 28px system-ui';
         ctx.textAlign = 'center';
         ctx.fillText('+' + run.flash.gained, W / 2, H * 0.4);
+        if (run.flash.bonusLife) {
+          ctx.fillStyle = '#ffd54f';
+          ctx.font = 'bold 26px system-ui';
+          ctx.fillText('+1 ❤', W / 2, H * 0.4 + 34);
+        }
       }
     }
     ctx.restore();
@@ -1378,6 +1439,9 @@
     getLearners: function () { return learners; },
     chestAt: chestAt,
     resolveHit: resolveHit,
+    pickBonusIndices: pickBonusIndices,
+    isBonusQ: isBonusQ,
+    MAX_LIVES: MAX_LIVES,
     resolveMiss: resolveMiss,
     spawnChests: spawnChests,
     spawnHazards: spawnHazards,
