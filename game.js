@@ -13,7 +13,7 @@
   const LIVES = 3;
   const MAX_ATTEMPTS = 1;
   const BASE_PTS = [0, 10, 20, 30, 40, 50];
-  const ITEM_SEC = [0, 8, 7, 6, 6, 7];
+  const ITEM_SEC = [0, 10, 9, 8, 8, 9];
   const MAX_PLAUSIBLE = 5000;
   const DEMO =
     /(?:\?|&)(?:demo|test)=1(?:&|$)/.test(location.search || '') ||
